@@ -1,12 +1,14 @@
 from .. import logging as logg
 from .utils import mkdir_p
+from collections import Counter
 
 from anndata import AnnData
 import math
 import numpy as np
 import os
 
-def get_model(model_name):
+
+def get_model(model_name, model_path=None, vocab_file=None):
     if model_name == 'esm1':
         from ..tools.fb_model import FBModel
         model = FBModel(
@@ -21,13 +23,15 @@ def get_model(model_name):
         )
     elif model_name == 'tape':
         from ..tools.tape_model import TAPEModel
-        model = TAPEModel(
-            'bert-base',
-        )
+        model = TAPEModel('bert-base', )
+    elif 'BERT' in model_name:
+        from ..tools.bert_model import BertModel
+        model = BertModel(model_name, model_path, vocab_file)
     else:
-        raise ValueError('Invalid model {}'.format(model_nam))
+        raise ValueError('Invalid model {}'.format(model_name))
 
     return model
+
 
 def embed_seqs(
     model,
@@ -37,17 +41,29 @@ def embed_seqs(
 ):
     if 'esm' in model.name_:
         from ..tools.fb_semantics import embed_seqs_fb
-        seqs_fb = sorted([ seq for seq in seqs ])
+        seqs_fb = sorted([seq for seq in seqs])
         embedded = embed_seqs_fb(
-            model.model_, seqs_fb, model.repr_layers_, model.alphabet_,
-            use_cache=False, verbose=verbose,
+            model.model_,
+            seqs_fb,
+            model.repr_layers_,
+            model.alphabet_,
+            use_cache=False,
+            verbose=verbose,
         )
-        X_embed = np.array([
-            embedded[seq][0]['embedding'] for seq in seqs_fb
-        ])
+        X_embed = np.array([embedded[seq][0]['embedding'] for seq in seqs_fb])
+    elif 'BERT' in model.name_:
+        import transformers
+        seq_strings = [" ".join(str(s)) for s in seqs.keys()]
+        feat_extract = transformers.pipeline("feature-extraction",
+                                             model=model.model_,
+                                             tokenizer=model.tokenizer_)
+        feats = feat_extract(seq_strings)
+        X_embed = [np.array(f) for f in feats]
+
     else:
-        raise ValueError('Model {} not supported for sequence embedding'
-                         .format(model.name_))
+        raise ValueError(
+            'Model {} not supported for sequence embedding'.format(
+                model.name_))
 
     sorted_seqs = sorted(seqs)
     for seq_idx, seq in enumerate(sorted_seqs):
@@ -55,6 +71,7 @@ def embed_seqs(
             meta['embedding'] = X_embed[seq_idx]
 
     return seqs
+
 
 def populate_embedding(
     model,
@@ -69,21 +86,23 @@ def populate_embedding(
 
     if use_cache:
         mkdir_p('target/{}/embedding'.format(namespace))
-        embed_prefix = ('target/{}/embedding/{}_512'
-                        .format(namespace, model.name_,))
+        embed_prefix = ('target/{}/embedding/{}_512'.format(
+            namespace,
+            model.name_,
+        ))
 
-    sorted_seqs = np.array([ str(s) for s in sorted(seqs.keys()) ])
+    sorted_seqs = np.array([str(s) for s in sorted(seqs.keys())])
     n_batches = math.ceil(len(sorted_seqs) / float(batch_size))
     for batchi in range(n_batches):
         if verbose:
-            logg.info('Embedding sequence batch {} / {}'
-                      .format(batchi + 1, n_batches))
+            logg.info('Embedding sequence batch {} / {}'.format(
+                batchi + 1, n_batches))
 
         # Identify the batch.
         start = batchi * batch_size
         end = (batchi + 1) * batch_size
         sorted_seqs_batch = sorted_seqs[start:end]
-        seqs_batch = { seq: seqs[seq] for seq in sorted_seqs_batch }
+        seqs_batch = {seq: seqs[seq] for seq in sorted_seqs_batch}
 
         # Load from cache if available.
         if use_cache:
@@ -118,6 +137,7 @@ def populate_embedding(
 
     return seqs
 
+
 def seqs_to_anndata(seqs):
     X, obs = [], {}
     obs['n_seq'] = []
@@ -131,9 +151,9 @@ def seqs_to_anndata(seqs):
                 continue
             if key not in obs:
                 obs[key] = []
-            obs[key].append(Counter([
-                meta[key] for meta in seqs[seq]
-            ]).most_common(1)[0][0])
+            obs[key].append(
+                Counter([meta[key]
+                         for meta in seqs[seq]]).most_common(1)[0][0])
         obs['n_seq'].append(len(seqs[seq]))
         obs['seq'].append(str(seq))
         obs['seq_len'].append(len(seq))
@@ -145,9 +165,12 @@ def seqs_to_anndata(seqs):
 
     return adata
 
+
 def featurize_seqs(
     seqs,
     model_name='esm1b',
+    model_path=None,
+    vocab_file=None,
     mkey='model',
     embed_batch_size=3000,
     use_cache=False,
@@ -184,11 +207,9 @@ def featurize_seqs(
     model: `.uns`
         language model
     """
-    model = get_model(model_name)
+    model = get_model(model_name, model_path, vocab_file)
 
-    seqs = {
-        str(seq): [ {} ] for seq in seqs
-    }
+    seqs = {str(seq): [{}] for seq in seqs}
     seqs = populate_embedding(
         model,
         seqs,
@@ -204,9 +225,12 @@ def featurize_seqs(
 
     return adata
 
+
 def featurize_fasta(
     fname,
     model_name='esm1b',
+    model_path=None,
+    vocab_file=None,
     mkey='model',
     embed_batch_size=3000,
     use_cache=True,
@@ -247,7 +271,7 @@ def featurize_fasta(
     model: `.uns`
         language model
     """
-    model = get_model(model_name)
+    model = get_model(model_name, model_path, vocab_file)
 
     # Parse fasta.
     from Bio import SeqIO

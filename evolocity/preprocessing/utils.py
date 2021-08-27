@@ -1,3 +1,5 @@
+import os
+import errno
 import numpy as np
 import pandas as pd
 from scipy.sparse import issparse
@@ -32,8 +34,7 @@ def verify_dtypes(adata):
             _ = adata[:, 0]
             logg.warn(
                 "Safely deleted unstructured annotations (adata.uns), \n"
-                "as these do not comply with permissible anndata datatypes."
-            )
+                "as these do not comply with permissible anndata datatypes.")
         except:
             logg.warn(
                 "The data might be corrupted. Please verify all annotation datatypes."
@@ -48,17 +49,12 @@ def get_size(adata, layer=None):
 
 def get_initial_size(adata, layer=None):
     if layer in adata.layers.keys():
-        return (
-            np.array(adata.obs[f"initial_size_{layer}"])
-            if f"initial_size_{layer}" in adata.obs.keys()
-            else get_size(adata, layer)
-        )
+        return (np.array(adata.obs[f"initial_size_{layer}"])
+                if f"initial_size_{layer}" in adata.obs.keys() else get_size(
+                    adata, layer))
     elif layer is None or layer == "X":
-        return (
-            np.array(adata.obs["initial_size"])
-            if "initial_size" in adata.obs.keys()
-            else get_size(adata)
-        )
+        return (np.array(adata.obs["initial_size"])
+                if "initial_size" in adata.obs.keys() else get_size(adata))
     else:
         return None
 

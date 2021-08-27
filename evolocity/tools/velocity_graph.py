@@ -15,11 +15,12 @@ from scipy.sparse import coo_matrix
 import numpy as np
 from tqdm import tqdm
 
+
 def get_iterative_indices(
-        indices,
-        index,
-        n_recurse_neighbors=0,
-        max_neighs=None,
+    indices,
+    index,
+    n_recurse_neighbors=0,
+    max_neighs=None,
 ):
     def iterate_indices(indices, index, n_recurse_neighbors):
         if n_recurse_neighbors > 1:
@@ -34,14 +35,14 @@ def get_iterative_indices(
         indices = np.random.choice(indices, max_neighs, replace=False)
     return indices
 
+
 def get_indices(dist, n_neighbors=None, mode_neighbors='distances'):
     D = dist.copy()
     D.data += 1e-6
 
     n_counts = sum_var(D > 0)
-    n_neighbors = (
-        n_counts.min() if n_neighbors is None else min(n_counts.min(), n_neighbors)
-    )
+    n_neighbors = (n_counts.min() if n_neighbors is None else min(
+        n_counts.min(), n_neighbors))
     rows = np.where(n_counts > n_neighbors)[0]
     cumsum_neighs = np.insert(n_counts.cumsum(), 0, 0)
     dat = D.data
@@ -58,33 +59,43 @@ def get_indices(dist, n_neighbors=None, mode_neighbors='distances'):
     elif mode_neighbors == 'connectivities':
         knn_indices = D.indices.reshape((-1, n_neighbors))
         knn_distances = D.data.reshape((-1, n_neighbors))
-        _, conn = compute_connectivities_umap(
-            knn_indices, knn_distances, D.shape[0], n_neighbors
-        )
+        _, conn = compute_connectivities_umap(knn_indices, knn_distances,
+                                              D.shape[0], n_neighbors)
         indices = get_indices_from_csr(conn)
     return indices, D
 
-def predict_sequence_prob(seq_of_interest, vocabulary, model,
-                          verbose=False):
+
+def predict_sequence_prob(seq_of_interest, vocabulary, model, verbose=False):
     if 'esm' in model.name_:
         from .fb_semantics import predict_sequence_prob_fb
         return predict_sequence_prob_fb(
-            seq_of_interest, model.alphabet_, model.model_,
-            model.repr_layers_, verbose=verbose,
+            seq_of_interest,
+            model.alphabet_,
+            model.model_,
+            model.repr_layers_,
+            verbose=verbose,
         )
     elif model.name_ == 'tape':
         from .tape_semantics import predict_sequence_prob_tape
-        return predict_sequence_prob_tape(
-            seq_of_interest, model
-        )
+        return predict_sequence_prob_tape(seq_of_interest, model)
+    elif 'BERT' in model.name_:
+        from .bert_semantics import predict_sequence_prob_bert
+        return predict_sequence_prob_bert(seq_of_interest, model)
     else:
         raise ValueError('Invalid model name {}'.format(model.name_))
 
-def likelihood_compare(seq1, seq2, vocabulary, model,
-                       pos1=None, pos2=None, seq_cache={}, verbose=False):
+
+def likelihood_compare(seq1,
+                       seq2,
+                       vocabulary,
+                       model,
+                       pos1=None,
+                       pos2=None,
+                       seq_cache={},
+                       verbose=False):
     likelihoods = []
 
-    for seq_pred, positions in zip([ seq1, seq2 ], [ pos1, pos2 ]):
+    for seq_pred, positions in zip([seq1, seq2], [pos1, pos2]):
         if positions is None:
             positions = range(len(seq_pred))
 
@@ -92,15 +103,13 @@ def likelihood_compare(seq1, seq2, vocabulary, model,
             seq_probs = seq_cache[seq_pred][list(positions)]
 
         else:
-            y_pred = predict_sequence_prob(
-                seq_pred, vocabulary, model, verbose=verbose
-            )
+            y_pred = predict_sequence_prob(seq_pred,
+                                           vocabulary,
+                                           model,
+                                           verbose=verbose)
             seq_probs = np.array([
-                y_pred[i + 1, (
-                    vocabulary[seq_pred[i]]
-                    if seq_pred[i] in vocabulary else
-                    model.unk_idx_
-                )]
+                y_pred[i + 1, (vocabulary[seq_pred[i]] if seq_pred[i] in
+                               vocabulary else model.unk_idx_)]
                 for i in positions
             ])
 
@@ -108,24 +117,41 @@ def likelihood_compare(seq1, seq2, vocabulary, model,
 
     return likelihoods[1] - likelihoods[0]
 
+
 def align_seqs(seq1, seq2):
     # Align, prefer matches to gaps.
-    return pairwise2.align.globalms(
-        seq1, seq2, 5, -4, -4, -.1, one_alignment_only=True
-    )[0]
+    return pairwise2.align.globalms(seq1,
+                                    seq2,
+                                    5,
+                                    -4,
+                                    -4,
+                                    -.1,
+                                    one_alignment_only=True)[0]
+
 
 def likelihood_muts(
-        seq1, seq2, vocabulary, model,
-        seq_cache={}, verbose=False, natural_aas=None,
+    seq1,
+    seq2,
+    vocabulary,
+    model,
+    seq_cache={},
+    verbose=False,
+    natural_aas=None,
 ):
     a_seq1, a_seq2, _, _, _ = align_seqs(seq1, seq2)
 
     # Map alignment to original indices.
     del1, sub1, del2, sub2 = [], [], [], []
-    for a_seq, other_seq, deletions, substitutions in zip(
-            [ a_seq1, a_seq2, ], [ a_seq2, a_seq1, ],
-            [ del1, del2 ], [ sub1, sub2, ]
-    ):
+    for a_seq, other_seq, deletions, substitutions in zip([
+            a_seq1,
+            a_seq2,
+    ], [
+            a_seq2,
+            a_seq1,
+    ], [del1, del2], [
+            sub1,
+            sub2,
+    ]):
         orig_idx = 0
         for a_idx, ch in enumerate(a_seq):
             if ch == '-':
@@ -141,13 +167,25 @@ def likelihood_muts(
             orig_idx += 1
 
     return likelihood_compare(
-        seq1, seq2, vocabulary, model,
-        pos1=sub1, pos2=sub2, seq_cache=seq_cache, verbose=verbose,
+        seq1,
+        seq2,
+        vocabulary,
+        model,
+        pos1=sub1,
+        pos2=sub2,
+        seq_cache=seq_cache,
+        verbose=verbose,
     )
 
+
 def likelihood_blosum62(
-        seq1, seq2, vocabulary, model,
-        seq_cache={}, verbose=False, natural_aas=None,
+    seq1,
+    seq2,
+    vocabulary,
+    model,
+    seq_cache={},
+    verbose=False,
+    natural_aas=None,
 ):
     from Bio.SubsMat import MatrixInfo as matlist
     matrix = matlist.blosum62
@@ -164,6 +202,7 @@ def likelihood_blosum62(
             scores.append(matrix[(ch2, ch1)])
 
     return np.mean(scores)
+
 
 def vals_to_csr(vals, rows, cols, shape, split_negative=False):
     graph = coo_matrix((vals, (rows, cols)), shape=shape)
@@ -182,18 +221,19 @@ def vals_to_csr(vals, rows, cols, shape, split_negative=False):
     else:
         return graph.tocsr()
 
+
 class VelocityGraph:
     def __init__(
-            self,
-            adata,
-            seqs,
-            score='lm',
-            vkey='velocity',
-            n_recurse_neighbors=None,
-            random_neighbors_at_max=None,
-            mode_neighbors='distances',
-            include_set='natural_aas',
-            verbose=False,
+        self,
+        adata,
+        seqs,
+        score='lm',
+        vkey='velocity',
+        n_recurse_neighbors=None,
+        random_neighbors_at_max=None,
+        mode_neighbors='distances',
+        include_set='natural_aas',
+        verbose=False,
     ):
         self.adata = adata
 
@@ -211,17 +251,33 @@ class VelocityGraph:
 
         if include_set == 'natural_aas':
             self.include_set = set([
-                'A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H', 'I',
-                'L', 'K', 'M', 'F', 'P', 'S', 'T', 'W', 'Y', 'V',
+                'A',
+                'R',
+                'N',
+                'D',
+                'C',
+                'Q',
+                'E',
+                'G',
+                'H',
+                'I',
+                'L',
+                'K',
+                'M',
+                'F',
+                'P',
+                'S',
+                'T',
+                'W',
+                'Y',
+                'V',
             ])
         else:
             self.include_set = None
 
         if np.min((get_neighs(adata, 'distances') > 0).sum(1).A1) == 0:
-            raise ValueError(
-                'Your neighbor graph seems to be corrupted. '
-                'Consider recomputing via scanpy.pp.neighbors.'
-            )
+            raise ValueError('Your neighbor graph seems to be corrupted. '
+                             'Consider recomputing via scanpy.pp.neighbors.')
         self.indices = get_indices(
             dist=get_neighs(adata, 'distances'),
             mode_neighbors=mode_neighbors,
@@ -237,7 +293,6 @@ class VelocityGraph:
 
         self.verbose = verbose
 
-
     def compute_likelihoods(self, vocabulary, model):
         if self.verbose:
             iterator = tqdm(self.seqs)
@@ -248,21 +303,19 @@ class VelocityGraph:
             return
 
         for seq in iterator:
-            y_pred = predict_sequence_prob(
-                seq, vocabulary, model, verbose=self.verbose
-            )
+            y_pred = predict_sequence_prob(seq,
+                                           vocabulary,
+                                           model,
+                                           verbose=self.verbose)
 
             if self.score == 'lm':
                 self.seq_probs[seq] = np.array([
-                    y_pred[i + 1, (
-                        vocabulary[seq[i]]
-                        if seq[i] in vocabulary else
-                        model.unk_idx_
-                    )] for i in range(len(seq))
+                    y_pred[i + 1, (vocabulary[seq[i]] if seq[i] in
+                                   vocabulary else model.unk_idx_)]
+                    for i in range(len(seq))
                 ])
             else:
                 raise ValueError('Invalid score {}'.format(self.score))
-
 
     def compute_gradients(self, vocabulary, model):
         n_obs = self.adata.X.shape[0]
@@ -274,9 +327,9 @@ class VelocityGraph:
             iterator = range(n_obs)
 
         for i in iterator:
-            neighs_idx = get_iterative_indices(
-                self.indices, i, self.n_recurse_neighbors, self.max_neighs
-            )
+            neighs_idx = get_iterative_indices(self.indices, i,
+                                               self.n_recurse_neighbors,
+                                               self.max_neighs)
 
             if self.score == 'lm':
                 score_fn = likelihood_muts
@@ -287,9 +340,12 @@ class VelocityGraph:
 
             val = np.array([
                 score_fn(
-                    self.seqs[i], self.seqs[j],
-                    vocabulary, model,
-                    seq_cache=self.seq_probs, verbose=self.verbose,
+                    self.seqs[i],
+                    self.seqs[j],
+                    vocabulary,
+                    model,
+                    seq_cache=self.seq_probs,
+                    verbose=self.verbose,
                     natural_aas=self.include_set,
                 ) for j in neighs_idx
             ])
@@ -301,26 +357,30 @@ class VelocityGraph:
         vals = np.hstack(vals)
         vals[np.isnan(vals)] = 0
 
-        self.graph, self.graph_neg = vals_to_csr(
-            vals, rows, cols, shape=(n_obs, n_obs), split_negative=True
-        )
+        self.graph, self.graph_neg = vals_to_csr(vals,
+                                                 rows,
+                                                 cols,
+                                                 shape=(n_obs, n_obs),
+                                                 split_negative=True)
 
         confidence = self.graph.max(1).A.flatten()
-        self.self_prob = np.clip(np.percentile(confidence, 98) - confidence, 0, 1)
+        self.self_prob = np.clip(
+            np.percentile(confidence, 98) - confidence, 0, 1)
+
 
 def velocity_graph(
-        adata,
-        model_name='esm1b',
-        mkey='model',
-        score='lm',
-        seqs=None,
-        vkey='velocity',
-        n_recurse_neighbors=0,
-        random_neighbors_at_max=None,
-        mode_neighbors='distances',
-        include_set=None,
-        copy=False,
-        verbose=True,
+    adata,
+    model_name='esm1b',
+    mkey='model',
+    score='lm',
+    seqs=None,
+    vkey='velocity',
+    n_recurse_neighbors=0,
+    random_neighbors_at_max=None,
+    mode_neighbors='distances',
+    include_set=None,
+    copy=False,
+    verbose=True,
 ):
     """Computes velocity scores at each edge in the graph.
 
@@ -382,10 +442,10 @@ def velocity_graph(
         raise ValueError('Number of sequences should correspond to '
                          'number of observations.')
 
-    valid_scores = { 'lm', 'blosum62' }
+    valid_scores = {'lm', 'blosum62'}
     if score not in valid_scores:
-        raise ValueError('Score must be one of {}'
-                         .format(', '.join(valid_scores)))
+        raise ValueError('Score must be one of {}'.format(
+            ', '.join(valid_scores)))
 
     if mkey not in adata.uns or model_name != adata.uns[mkey].name_:
         velocity_model(
